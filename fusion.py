@@ -1,9 +1,19 @@
 import pandas as pd
 
-df = pd.read_csv("ton_fichier.csv")
+# Lecture correcte du CSV français
+df = pd.read_csv(
+    r"C:\Users\mbouvier\Documents\SAE-Proba\ponctualite-mensuelle-transilien.csv",
+    sep=";",
+    decimal=","
+)
 
+# Nettoyage des noms de colonnes
+df.columns = df.columns.str.strip()
+
+# Conversion de la date
 df["Date"] = pd.to_datetime(df["Date"], format="%Y-%m")
 
+# Agrégation mensuelle
 df_mensuel = (
     df
     .groupby("Date", as_index=False)
@@ -13,9 +23,5 @@ df_mensuel = (
     })
 )
 
-df_mensuel["Taux de ponctualité"] = df_mensuel["Taux de ponctualité"].round(2)
-df_mensuel["Nombre de voyageurs à l'heure pour un voyageur en retard"] = (
-    df_mensuel["Nombre de voyageurs à l'heure pour un voyageur en retard"].round(0)
-)
-
+# Sauvegarde
 df_mensuel.to_csv("donnees_mensuelles_agregees.csv", index=False)
