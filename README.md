@@ -25,12 +25,12 @@ Cette branche peut contenir :
 ## Ressources
 
 ### Liens utiles
-- https://stt4230.rbind.io/tutoriels_etudiants/hiver_2015/graphique_temporel_ggplot2/
-- https://www.youtube.com/watch?v=VvZ5T7mJ02U
+- Graphique de séries temporelles documentation : https://stt4230.rbind.io/tutoriels_etudiants/hiver_2015/graphique_temporel_ggplot2/
+- Graphique de séries temporelles vidéo : https://www.youtube.com/watch?v=VvZ5T7mJ02U
 
 ---
 
-## 🛠️ Utilisation
+## Utilisation
 
 - Consulter cette branche en parallèle du développement
 - Ajouter ou mettre à jour les ressources si nécessaire
