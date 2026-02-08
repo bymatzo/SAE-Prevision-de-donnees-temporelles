@@ -2,7 +2,7 @@ import pandas as pd
 
 # Lecture correcte du CSV français
 df = pd.read_csv(
-    r"C:\Users\mbouvier\Documents\SAE-Proba\ponctualite-mensuelle-transilien.csv",
+    r"C:\Users\darta\Downloads\ponctualite-mensuelle-transilien.csv",
     sep=";",
     decimal=","
 )
