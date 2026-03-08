@@ -1,27 +1,23 @@
 import pandas as pd
 
-# Lecture correcte du CSV français
+# Lecture du CSV français
 df = pd.read_csv(
     r"C:\Users\darta\Downloads\ponctualite-mensuelle-transilien.csv",
     sep=";",
-    decimal=","
+    decimal=","gu
 )
 
 # Nettoyage des noms de colonnes
 df.columns = df.columns.str.strip()
 
-# Conversion de la date
+# Conversion de la colonne Date
 df["Date"] = pd.to_datetime(df["Date"], format="%Y-%m")
 
-# Agrégation mensuelle
-df_mensuel = (
-    df
-    .groupby("Date", as_index=False)
-    .agg({
-        "Taux de ponctualité": "mean",
-        "Nombre de voyageurs à l'heure pour un voyageur en retard": "mean"
-    })
-)
+# Filtrer uniquement la ligne A
+df_ligne_A = df[df["Ligne"] == "A"]
 
-# Sauvegarde
-df_mensuel.to_csv("donnees_mensuelles_agregees.csv", index=False)
+# Garder seulement les colonnes Date et Taux de ponctualité
+df_final = df_ligne_A[["Date", "Taux de ponctualité"]]
+
+# Export CSV
+df_final.to_csv("donnees_ligne_A.csv", index=False)
