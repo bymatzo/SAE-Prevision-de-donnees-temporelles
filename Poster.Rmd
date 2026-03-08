@@ -1,0 +1,433 @@
+---
+title: "Prévision de Données Temporelles"
+author: "Bouvier Matéo - Ulrich Berthon - Violette Grosjean - Wissem Lamouchi"
+date: "`r Sys.Date()`"
+output:
+  ioslides_presentation: default
+  beamer_presentation:
+    theme: Madrid
+    colortheme: whale
+    fonttheme: structurebold
+  slidy_presentation: default
+institute: IUT LYON 2
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  out.width = "100%"
+)
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(scales)
+library(forecast)
+library(zoo)
+```
+
+# Série 1 — Abonnés Netflix
+
+## Présentation des données
+
+- **Source** : Kaggle / GitHub projet
+- **Variable** : Nombre d'abonnés (millions)
+- **Période** : Trimestrielle
+- **Caractéristique** : Série avec **tendance forte**, **sans saisonnalité** marquée
+```{r load-netflix}
+url_netflix <- "https://raw.githubusercontent.com/bymatzo/SAE-Prevision-de-donnees-temporelles/data/Données_Clients_Netflix.csv"
+
+netflix <- read_delim(
+  file = url_netflix,
+  delim = ";",
+  show_col_types = FALSE
+)
+
+df_netflix <- netflix %>%
+  rename(Date = `Time Period`) %>%
+  mutate(Date = dmy(Date)) %>%
+  arrange(Date)
+
+ts_netflix <- ts(df_netflix$Subscribers, frequency = 4)
+```
+
+## Visualisation brute de la série
+```{r plot-netflix-brut, fig.cap="Nombre d'abonnés Netflix — série brute", fig.height=3.5}
+ggplot(df_netflix, aes(x = Date, y = Subscribers)) +
+  geom_line(color = "#e50914", linewidth = 0.8) +
+  geom_point(color = "#e50914", size = 1.5, alpha = 0.6) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  labs(
+    title = "Série brute — Abonnés Netflix",
+    x = "Date", y = "Abonnés (millions)"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Modèle 1 — Moyennes sur le passé
+
+La méthode des **moyennes sur le passé** prédit chaque valeur future par la moyenne de **toutes les observations précédentes**. C'est la référence naïve.
+```{r moy-passe-netflix, fig.cap="Prévision par moyennes sur le passé — Netflix", fig.height=3.8}
+n_nf <- nrow(df_netflix)
+
+moy_passe <- cumsum(df_netflix$Subscribers) / seq_along(df_netflix$Subscribers)
+
+df_netflix <- df_netflix %>%
+  mutate(Moy_passe = moy_passe)
+
+rmse_naive_nf <- sqrt(mean((df_netflix$Subscribers - df_netflix$Moy_passe)^2, na.rm = TRUE))
+
+prev_naive_val <- mean(df_netflix$Subscribers)
+last_date_nf   <- max(df_netflix$Date)
+dates_prev_nf  <- seq(last_date_nf, by = "quarter", length.out = 9)[-1]
+
+df_naive_prev <- data.frame(
+  Date      = dates_prev_nf,
+  Prevision = rep(prev_naive_val, 8)
+)
+
+ggplot() +
+  geom_line(data = df_netflix,
+            aes(x = Date, y = Subscribers, color = "Série brute"),
+            linewidth = 0.7, alpha = 0.5) +
+  geom_line(data = df_netflix,
+            aes(x = Date, y = Moy_passe, color = "Moyenne passé"),
+            linewidth = 1, linetype = "dashed") +
+  geom_line(data = df_naive_prev,
+            aes(x = Date, y = Prevision, color = "Prévision"),
+            linewidth = 1.1, linetype = "dotted") +
+  geom_point(data = df_naive_prev,
+             aes(x = Date, y = Prevision), color = "#8e44ad", size = 2) +
+  scale_color_manual(values = c("Série brute"   = "#e50914",
+                                "Moyenne passé" = "#8e44ad",
+                                "Prévision"     = "#6c3483")) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  labs(title = paste0("Moyennes sur le passé — RMSE : ",
+                      round(rmse_naive_nf / 1e6, 2), "M"),
+       x = "Date", y = "Abonnés (millions)", color = "") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "top")
+```
+
+La moyenne sur le passé **sous-estime** fortement la croissance : elle ne capte pas la tendance haussière, ce qui donne un RMSE élevé.
+
+## Modèle 2 — Lissage exponentiel double (Holt)
+
+Le **lissage de Holt** lisse simultanément le **niveau** et la **tendance**, ce qui le rend adapté à une série sans saisonnalité mais à croissance soutenue.
+```{r holt-netflix, fig.cap="Lissage exponentiel double Holt — Netflix avec prévisions", fig.height=3.8}
+modele_holt <- holt(ts_netflix, h = 8, damped = FALSE)
+rmse_holt   <- sqrt(mean(residuals(modele_holt)^2))
+
+df_holt_prev <- data.frame(
+  Date      = dates_prev_nf,
+  Prevision = as.numeric(modele_holt$mean),
+  Lo80      = as.numeric(modele_holt$lower[, 1]),
+  Hi80      = as.numeric(modele_holt$upper[, 1])
+)
+
+df_holt_fitted <- df_netflix %>%
+  mutate(Fitted = as.numeric(modele_holt$fitted))
+
+ggplot() +
+  geom_line(data = df_holt_fitted,
+            aes(x = Date, y = Subscribers, color = "Série brute"),
+            linewidth = 0.7, alpha = 0.5) +
+  geom_line(data = df_holt_fitted,
+            aes(x = Date, y = Fitted, color = "Lissage Holt"),
+            linewidth = 1) +
+  geom_ribbon(data = df_holt_prev,
+              aes(x = Date, ymin = Lo80, ymax = Hi80),
+              fill = "#2980b9", alpha = 0.2) +
+  geom_line(data = df_holt_prev,
+            aes(x = Date, y = Prevision, color = "Prévision"),
+            linewidth = 1.1, linetype = "dashed") +
+  scale_color_manual(values = c("Série brute"  = "#e50914",
+                                "Lissage Holt" = "#2980b9",
+                                "Prévision"    = "#1a5276")) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  labs(title = paste0("Holt (lissage double) — RMSE : ",
+                      round(rmse_holt / 1e6, 2), "M"),
+       x = "Date", y = "Abonnés (millions)", color = "") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "top")
+```
+
+## Comparaison des modèles — Netflix
+```{r comparaison-netflix, fig.cap="Comparaison RMSE — Netflix", fig.height=2.8}
+df_comp_nf <- data.frame(
+  Modele = c("Moyennes sur le passé", "Holt (double)"),
+  RMSE   = c(rmse_naive_nf, rmse_holt)
+)
+
+ggplot(df_comp_nf, aes(x = Modele, y = RMSE / 1e6, fill = RMSE == min(RMSE))) +
+  geom_col(show.legend = FALSE, width = 0.5) +
+  geom_text(aes(label = paste0(round(RMSE / 1e6, 2), "M")),
+            vjust = -0.4, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c("FALSE" = "#c0392b", "TRUE" = "#27ae60")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +
+  labs(title = "Comparaison RMSE — Netflix (vert = meilleur modèle)",
+       x = "", y = "RMSE (millions)") +
+  theme_minimal(base_size = 10)
+```
+
+Le **lissage de Holt** est retenu : son RMSE est nettement inférieur car il suit la tendance croissante, contrairement à la méthode naïve qui converge vers une valeur fixe.
+
+## Analyse des résidus — Holt
+```{r residus-netflix, fig.cap="Résidus du lissage Holt — Netflix", fig.height=3}
+df_res_nf <- df_netflix %>%
+  mutate(Residu = as.numeric(residuals(modele_holt)))
+
+seuil_nf <- 2 * sd(df_res_nf$Residu, na.rm = TRUE)
+
+ggplot(df_res_nf, aes(x = Date, y = Residu)) +
+  geom_line(color = "gray50", linewidth = 0.6) +
+  geom_point(
+    data = df_res_nf %>% filter(abs(Residu) > seuil_nf),
+    aes(x = Date, y = Residu), color = "#e94560", size = 3
+  ) +
+  geom_hline(yintercept = c(-seuil_nf, seuil_nf),
+             linetype = "dashed", color = "#e94560", alpha = 0.6) +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  labs(title = "Résidus Holt — valeurs aberrantes en rouge (±2 sigma)",
+       x = "Date", y = "Résidu") +
+  theme_minimal(base_size = 10)
+```
+
+# Série 2 — Ponctualité RER A
+
+## Présentation des données
+
+- **Source** : RATP / GitHub projet
+- **Période** : Janvier 2016 -- Janvier 2020
+- **Variable** : Taux de ponctualité mensuel (%)
+- **Caractéristique** : Série avec **tendance** et **saisonnalité annuelle**
+```{r load-train}
+url_train <- "https://raw.githubusercontent.com/bymatzo/SAE-Prevision-de-donnees-temporelles/data/donnees_ligne_A.csv"
+
+train <- read_delim(
+  file = url_train,
+  delim = ",",
+  locale = locale(encoding = "UTF-8"),
+  show_col_types = FALSE
+)
+
+df_train <- train %>%
+  filter(
+    Date >= as.Date("2016-01-01"),
+    Date <= as.Date("2020-01-01")
+  ) %>%
+  arrange(Date)
+
+ts_train <- ts(df_train$`Taux de ponctualité`, start = c(2016, 1), frequency = 12)
+
+last_date_train  <- max(df_train$Date)
+dates_prev_train <- seq(last_date_train, by = "month", length.out = 13)[-1]
+```
+
+## Visualisation brute de la série
+```{r plot-train-brut, fig.cap="Taux de ponctualité mensuel brut — RER A (2016–2020)", fig.height=3.5}
+ggplot(df_train, aes(x = Date, y = `Taux de ponctualité`)) +
+  geom_line(color = "steelblue", linewidth = 0.8) +
+  geom_point(color = "steelblue", size = 1.2, alpha = 0.6) +
+  scale_x_date(date_breaks = "2 month", date_labels = "%m/%Y") +
+  labs(
+    title = "Série brute — Taux de ponctualité RER A",
+    x = "Mois", y = "Taux de ponctualité"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Décomposition additive (Moyennes Mobiles)
+```{r decomp-train, fig.cap="Décomposition additive — RER A", fig.height=4}
+decomp_mm <- decompose(ts_train, type = "additive")
+
+autoplot(decomp_mm) +
+  labs(title = "Décomposition (Moyennes Mobiles, ordre 12) — RER A") +
+  theme_minimal(base_size = 10)
+```
+
+
+## Coefficients saisonniers
+
+```{r coeff-sais, fig.cap="Coefficients saisonniers mensuels — RER A", fig.height=2.5}
+df_coeff <- data.frame(
+  Mois        = factor(month.abb, levels = month.abb),
+  Coefficient = decomp_mm$seasonal[1:12]
+)
+
+ggplot(df_coeff, aes(x = Mois, y = Coefficient, fill = Coefficient > 0)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c("TRUE" = "#2ecc71", "FALSE" = "#e74c3c")) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Coefficients saisonniers — RER A",
+       x = "Mois", y = "Coefficient additif") +
+  theme_minimal(base_size = 10)
+```
+
+## Série CVS
+```{r cvs-train, fig.cap="Série brute vs Corrigée des variations saisonnières", fig.height=3.2}
+df_train <- df_train %>%
+  mutate(CVS = `Taux de ponctualité` - decomp_mm$seasonal)
+
+ggplot(df_train, aes(x = Date)) +
+  geom_line(aes(y = `Taux de ponctualité`, color = "Brute"),
+            linewidth = 0.7, alpha = 0.5) +
+  geom_line(aes(y = CVS, color = "CVS"), linewidth = 0.9) +
+  scale_color_manual(values = c("Brute" = "steelblue", "CVS" = "#e94560")) +
+  scale_x_date(date_breaks = "3 month", date_labels = "%m/%Y") +
+  labs(title = "Série brute vs CVS — RER A",
+       x = "Mois", y = "Taux de ponctualité", color = "") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "top")
+```
+
+## Analyse des résidus
+```{r residus-train, fig.cap="Résidus — valeurs mal ajustées en rouge (±2 sigma)", fig.height=3}
+df_residus <- df_train %>%
+  mutate(Residu = as.numeric(decomp_mm$random)) %>%
+  filter(!is.na(Residu))
+
+seuil <- 2 * sd(df_residus$Residu, na.rm = TRUE)
+
+ggplot(df_residus, aes(x = Date, y = Residu)) +
+  geom_line(color = "gray50", linewidth = 0.6) +
+  geom_point(
+    data = df_residus %>% filter(abs(Residu) > seuil),
+    aes(x = Date, y = Residu), color = "#e94560", size = 3
+  ) +
+  geom_hline(yintercept = c(-seuil, seuil),
+             linetype = "dashed", color = "#e94560", alpha = 0.6) +
+  labs(title = "Résidus — points aberrants (±2 sigma)",
+       x = "Mois", y = "Résidu") +
+  theme_minimal(base_size = 10)
+```
+
+## Modèle 1 — Prévision par Moyennes Mobiles (k=12)
+```{r mm-prev-train, fig.cap="Prévision par moyennes mobiles (k=12) — RER A", fig.height=3.8}
+k <- 12
+n <- nrow(df_train)
+
+dernieres_val  <- tail(df_train$`Taux de ponctualité`, k)
+coeff_sais_vec <- decomp_mm$seasonal[1:12]
+
+prev_mm <- numeric(12)
+for (i in 1:12) {
+  mois_idx      <- ((n - 1 + i - 1) %% 12) + 1
+  prev_mm[i]    <- mean(dernieres_val) + coeff_sais_vec[mois_idx]
+  dernieres_val <- c(dernieres_val[-1], prev_mm[i])
+}
+
+rmse_mm <- sqrt(mean((tail(df_train$`Taux de ponctualité`, k) -
+                      rollmean(df_train$`Taux de ponctualité`,
+                               k = k, fill = NA, align = "right") %>%
+                      tail(k))^2, na.rm = TRUE))
+
+df_mm_prev  <- data.frame(Date = dates_prev_train, Prevision = prev_mm)
+df_train_mm <- df_train %>%
+  mutate(MM12 = rollmean(`Taux de ponctualité`, k = 12, fill = NA, align = "right"))
+
+ggplot() +
+  geom_line(data = df_train,
+            aes(x = Date, y = `Taux de ponctualité`, color = "Série brute"),
+            linewidth = 0.7, alpha = 0.5) +
+  geom_line(data = df_train_mm,
+            aes(x = Date, y = MM12, color = "MM (k=12)"),
+            linewidth = 1) +
+  geom_line(data = df_mm_prev,
+            aes(x = Date, y = Prevision, color = "Prévision"),
+            linewidth = 1.1, linetype = "dashed") +
+  geom_point(data = df_mm_prev,
+             aes(x = Date, y = Prevision), color = "#8e44ad", size = 2) +
+  scale_color_manual(values = c("Série brute" = "steelblue",
+                                "MM (k=12)"   = "#8e44ad",
+                                "Prévision"   = "#6c3483")) +
+  scale_x_date(date_breaks = "3 month", date_labels = "%m/%Y") +
+  labs(title = paste0("Prévision MM (k=12) — RMSE : ", round(rmse_mm, 4)),
+       x = "Mois", y = "Taux de ponctualité", color = "") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "top")
+```
+
+## Modèle 2 — Lissage exponentiel triple (Holt-Winters)
+```{r hw-train, fig.cap="Holt-Winters (lissage triple) — RER A avec prévisions", fig.height=3.8}
+modele_hw <- HoltWinters(ts_train, seasonal = "additive")
+prev_hw   <- forecast(modele_hw, h = 12)
+rmse_hw <- sqrt(mean(residuals(modele_hw)^2, na.rm = TRUE))
+
+df_hw_fitted <- df_train %>%
+  slice(-c(1:12)) %>%
+  mutate(Fitted = as.numeric(modele_hw$fitted[, 1]))
+
+df_hw_prev <- data.frame(
+  Date      = dates_prev_train,
+  Prevision = as.numeric(prev_hw$mean),
+  Lo80      = as.numeric(prev_hw$lower[, 1]),
+  Hi80      = as.numeric(prev_hw$upper[, 1])
+)
+
+ggplot() +
+  geom_line(data = df_train,
+            aes(x = Date, y = `Taux de ponctualité`, color = "Brute"),
+            linewidth = 0.7, alpha = 0.4) +
+  geom_line(data = df_hw_fitted,
+            aes(x = Date, y = Fitted, color = "Holt-Winters"),
+            linewidth = 1) +
+  geom_ribbon(data = df_hw_prev,
+              aes(x = Date, ymin = Lo80, ymax = Hi80),
+              fill = "#27ae60", alpha = 0.2) +
+  geom_line(data = df_hw_prev,
+            aes(x = Date, y = Prevision, color = "Prévision"),
+            linewidth = 1.1, linetype = "dashed") +
+  scale_color_manual(values = c("Brute"        = "steelblue",
+                                "Holt-Winters" = "#27ae60",
+                                "Prévision"    = "#1e8449")) +
+  scale_x_date(date_breaks = "3 month", date_labels = "%m/%Y") +
+  labs(title = paste0("Holt-Winters (triple) — RMSE : ", round(rmse_hw, 4)),
+       x = "Mois", y = "Taux de ponctualité", color = "") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "top")
+```
+
+## Comparaison des modèles — RER A
+```{r comparaison-train, fig.cap="Comparaison RMSE — RER A", fig.height=2.8}
+df_comp_train <- data.frame(
+  Modele = c("Moyennes Mobiles (k=12)", "Holt-Winters (triple)"),
+  RMSE   = c(rmse_mm, rmse_hw)
+)
+
+ggplot(df_comp_train, aes(x = Modele, y = RMSE, fill = RMSE == min(RMSE))) +
+  geom_col(show.legend = FALSE, width = 0.5) +
+  geom_text(aes(label = round(RMSE, 4)),
+            vjust = -0.4, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c("FALSE" = "#c0392b", "TRUE" = "#27ae60")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +
+  labs(title = "Comparaison RMSE — RER A (vert = meilleur modèle)",
+       x = "", y = "RMSE") +
+  theme_minimal(base_size = 10)
+```
+
+**Holt-Winters** est retenu : il modélise dynamiquement tendance et saisonnalité, là où la moyenne mobile applique un poids uniforme sans s'adapter.
+
+## Conclusion Générale
+
+| | Netflix | RER A |
+|---|---|---|
+| **Tendance** | Forte hausse | Légère baisse |
+| **Saisonnalité** | Absente | Annuelle |
+| **Modèle de référence** | Moyennes sur le passé | MM prédictive (k=12) |
+| **Modèle retenu** | Holt (double) | Holt-Winters (triple) |
+
+Dans les deux cas, le **RMSE** valide le choix du modèle le mieux adapté à la structure de la série : LED pour une tendance pure, LET dès qu'une saisonnalité est présente.
